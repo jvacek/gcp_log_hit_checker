@@ -21,12 +21,13 @@ pip install gcp-log-hit-checker
 ## Usage
 
 ```
-gcp-log-hit-checker <patterns-file> [--project <gcp-project-id>] [--since <duration>] [--format tsv|json]
+gcp-log-hit-checker <patterns-file> [--project <gcp-project-id>] [--since <duration>] [--format tsv|json] [--timeout <seconds>]
 ```
 
 - `--project` — GCP project ID, defaults to your active `gcloud` config project
 - `--since` — how far back to search; accepts `m` (minutes), `h` (hours), `d` (days), `w` (weeks). Default: `30d`
 - `--format` — output format, `tsv` (default) or `json`
+- `--timeout` — timeout per pattern check in seconds. Default: `600`
 
 ## Patterns file
 
