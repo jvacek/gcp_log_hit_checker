@@ -1,13 +1,33 @@
 [project]
 name = "gcp-log-hit-checker"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.1.2"
+description = "Check for hits against google cloud logging"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+authors = [
+    { name = "Jonas Vacek" }
+]
+keywords = ["gcp", "google-cloud", "logging", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Logging",
+    "Topic :: Utilities",
+]
 dependencies = [
     "google-cloud-logging>=3.15.0",
     "rich>=14.3.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/jvacek/gcp-log-hit-checker"
+Repository = "https://github.com/jvacek/gcp-log-hit-checker"
+Issues = "https://github.com/jvacek/gcp-log-hit-checker/issues"
 
 [project.scripts]
 gcp-log-hit-checker = "gcp_log_hit_checker.main:main"
