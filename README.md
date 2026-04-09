@@ -2,7 +2,9 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/gcp-log-hit-checker)](https://pypi.org/project/gcp-log-hit-checker/)
 [![Python versions](https://img.shields.io/pypi/pyversions/gcp-log-hit-checker)](https://pypi.org/project/gcp-log-hit-checker/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/gcp-log-hit-checker)](https://pypi.org/project/gcp-log-hit-checker/)
+[![pre-commit.ci status](https://results.pre-commit.ci/badge/github/jvacek/gcp_log_hit_checker/main.svg)](https://results.pre-commit.ci/latest/github/jvacek/gcp_log_hit_checker/main)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 
 Checks a list of GCP Cloud Logging filter patterns and reports whether each had any hits in a configurable time window. Patterns are checked in parallel, progress is shown on stderr, and results are written to stdout.
 
