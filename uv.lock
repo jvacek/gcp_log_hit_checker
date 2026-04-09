@@ -184,7 +184,7 @@ wheels = [
 
 [[package]]
 name = "gcp-log-hit-checker"
-version = "0.1.1"
+version = "0.1.4"
 source = { virtual = "." }
 dependencies = [
     { name = "google-cloud-logging" },
