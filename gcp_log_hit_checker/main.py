@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
@@ -17,9 +18,7 @@ EMOJI = {"hit": "✅", "no_hit": "❌", "error": "⚠️ ", "cancelled": "⏸️
 def parse_duration(s: str) -> timedelta:
     units = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
     if not s or s[-1] not in units or not s[:-1].isdigit():
-        raise argparse.ArgumentTypeError(
-            f"Invalid duration '{s}'. Use e.g. 30d, 7h, 1w, 90m."
-        )
+        raise argparse.ArgumentTypeError(f"Invalid duration '{s}'. Use e.g. 30d, 7h, 1w, 90m.")
     return timedelta(**{units[s[-1]]: int(s[:-1])})
 
 
@@ -35,9 +34,7 @@ def filter_link(project: str, pattern: str, since: timedelta) -> str:
     return f"https://console.cloud.google.com/logs/query;query={query};duration={duration}?project={project}"
 
 
-def check_pattern(
-    client: gcp_logging.Client, pattern: str, freshness_filter: str
-) -> tuple[str, str, str]:
+def check_pattern(client: gcp_logging.Client, pattern: str, freshness_filter: str) -> tuple[str, str, str]:
     """Returns (status, timestamp, entry_link) where status is 'hit' or 'no_hit'."""
     full_filter = f"{pattern} {freshness_filter}"
 
@@ -70,20 +67,21 @@ def main():
         default="tsv",
         help="Output format. Default: tsv",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=600,
+        metavar="SECONDS",
+        help="Total timeout in seconds for all checks. Default: 600",
+    )
     args = parser.parse_args()
 
-    freshness_filter = (datetime.now(timezone.utc) - args.since).strftime(
-        'timestamp>="%Y-%m-%dT%H:%M:%SZ"'
-    )
+    freshness_filter = (datetime.now(timezone.utc) - args.since).strftime('timestamp>="%Y-%m-%dT%H:%M:%SZ"')
 
     file_path = args.file
     try:
         with open(file_path) as f:
-            patterns = [
-                line.strip()
-                for line in f
-                if line.strip() and not line.lstrip().startswith("#")
-            ]
+            patterns = [line.strip() for line in f if line.strip() and not line.lstrip().startswith("#")]
     except OSError as e:
         print(f"Error reading {file_path}: {e}", file=sys.stderr)
         sys.exit(1)
@@ -91,7 +89,6 @@ def main():
     client = gcp_logging.Client(project=args.project)
     print(f"Using project: {client.project}", file=sys.stderr)
 
-    # status is one of: "hit", "no_hit", "error"
     results: dict[int, tuple[str, str, str]] = {}
 
     with Progress(
@@ -101,22 +98,14 @@ def main():
         transient=True,
         console=Console(stderr=True),
     ) as progress:
-        overall = progress.add_task(
-            f"[bold]0/{len(patterns)} done[/bold]", total=len(patterns)
-        )
-        task_ids = {
-            i: progress.add_task(f"[dim]{pattern}[/dim]", total=1)
-            for i, pattern in enumerate(patterns)
-        }
+        overall = progress.add_task(f"[bold]0/{len(patterns)} done[/bold]", total=len(patterns))
+        task_ids = {i: progress.add_task(f"[dim]{pattern}[/dim]", total=1) for i, pattern in enumerate(patterns)}
 
         interrupted = False
         pool = ThreadPoolExecutor(max_workers=10)
         try:
-            futures = {
-                pool.submit(check_pattern, client, p, freshness_filter): (i, p)
-                for i, p in enumerate(patterns)
-            }
-            for completed, future in enumerate(as_completed(futures), 1):
+            futures = {pool.submit(check_pattern, client, p, freshness_filter): (i, p) for i, p in enumerate(patterns)}
+            for completed, future in enumerate(as_completed(futures, timeout=args.timeout), 1):
                 i, pattern = futures[future]
                 error_msg = None
                 try:
@@ -142,6 +131,12 @@ def main():
                     description=f"[bold]{completed}/{len(patterns)} done[/bold]",
                     completed=completed,
                 )
+        except FuturesTimeoutError:
+            print(
+                f"Timed out after {args.timeout}s — some patterns did not complete.",
+                file=sys.stderr,
+            )
+            pool.shutdown(wait=False, cancel_futures=True)
         except KeyboardInterrupt:
             interrupted = True
             pool.shutdown(wait=False, cancel_futures=True)
@@ -155,16 +150,29 @@ def main():
         output = []
         for i, pattern in enumerate(patterns):
             if i not in results:
-                output.append({"pattern": pattern, "status": "cancelled", "timestamp": None, "entry_link": None, "filter_link": filter_link(client.project, pattern, args.since)})
+                output.append(
+                    {
+                        "pattern": pattern,
+                        "status": "cancelled",
+                        "timestamp": None,
+                        "entry_link": None,
+                        "filter_link": filter_link(client.project, pattern, args.since),
+                    }
+                )
             else:
                 status, timestamp, link = results[i]
-                output.append({
-                    "pattern": pattern,
-                    "status": status,
-                    "timestamp": timestamp or None,
-                    "entry_link": link or None,
-                    "filter_link": filter_link(client.project, pattern, args.since),
-                })
+                if status == "error":
+                    print(f"⚠️  {pattern}: {timestamp}", file=sys.stderr)
+                    continue
+                output.append(
+                    {
+                        "pattern": pattern,
+                        "status": status,
+                        "timestamp": timestamp or None,
+                        "entry_link": link or None,
+                        "filter_link": filter_link(client.project, pattern, args.since),
+                    }
+                )
         print(json.dumps(output, indent=2))
     else:
         for i, pattern in enumerate(patterns):
@@ -173,10 +181,13 @@ def main():
                 print(f"{EMOJI['cancelled']}\t{pattern}\t\t\t{flink}")
                 continue
             status, timestamp, link = results[i]
+            if status == "error":
+                print(f"⚠️  {pattern}: {timestamp}", file=sys.stderr)
+                continue
             print(f"{EMOJI[status]}\t{pattern}\t{timestamp}\t{link}\t{flink}")
 
-    if interrupted:
-        os._exit(130)  # 130 = 128 + SIGINT; kills remaining threads immediately
+    # Force-exit to kill any threads still blocked on network calls
+    os._exit(130 if interrupted else 0)
 
 
 if __name__ == "__main__":
