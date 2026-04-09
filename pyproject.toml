@@ -1,6 +1,6 @@
 [project]
 name = "gcp-log-hit-checker"
-version = "0.1.2"
+version = "0.1.1"
 description = "Check for hits against google cloud logging"
 readme = "README.md"
 requires-python = ">=3.13"
