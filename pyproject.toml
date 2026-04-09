@@ -25,9 +25,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jvacek/gcp-log-hit-checker"
-Repository = "https://github.com/jvacek/gcp-log-hit-checker"
-Issues = "https://github.com/jvacek/gcp-log-hit-checker/issues"
+Homepage = "https://github.com/jvacek/gcp_log_hit_checker"
+Repository = "https://github.com/jvacek/gcp_log_hit_checker"
+Issues = "https://github.com/jvacek/gcp_log_hit_checker/issues"
 
 [project.scripts]
 gcp-log-hit-checker = "gcp_log_hit_checker.main:main"
