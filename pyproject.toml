@@ -1,0 +1,13 @@
+[project]
+name = "gcp-log-hit-checker"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "google-cloud-logging>=3.15.0",
+    "rich>=14.3.3",
+]
+
+[project.scripts]
+gcp-log-hit-checker = "gcp_log_hit_checker.main:main"
