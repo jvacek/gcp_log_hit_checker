@@ -1,3 +1,4 @@
+import argparse
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -6,15 +7,22 @@ from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import logging as gcp_logging
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
-freshness_filter = (datetime.now(timezone.utc) - timedelta(days=30)).strftime(
-    'timestamp>="%Y-%m-%dT%H:%M:%SZ"'
-)
+
+def parse_duration(s: str) -> timedelta:
+    units = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+    if not s or s[-1] not in units or not s[:-1].isdigit():
+        raise argparse.ArgumentTypeError(
+            f"Invalid duration '{s}'. Use e.g. 30d, 7h, 1w, 90m."
+        )
+    return timedelta(**{units[s[-1]]: int(s[:-1])})
 
 
-def check_pattern(client: gcp_logging.Client, pattern: str) -> tuple[bool, str]:
+def check_pattern(
+    client: gcp_logging.Client, pattern: str, freshness_filter: str
+) -> tuple[bool, str]:
     full_filter = f"{pattern} {freshness_filter}"
 
-    print(f"  filter: {full_filter!r}", file=sys.stderr)
+    # print(f"  filter: {full_filter!r}", file=sys.stderr)
     entries = client.list_entries(
         filter_=full_filter,
         order_by="timestamp desc",
@@ -27,14 +35,23 @@ def check_pattern(client: gcp_logging.Client, pattern: str) -> tuple[bool, str]:
 
 
 def main():
-    import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="File with log filter patterns, one per line")
     parser.add_argument(
         "--project", help="GCP project ID (defaults to gcloud config project)"
     )
+    parser.add_argument(
+        "--since",
+        default="30d",
+        type=parse_duration,
+        metavar="DURATION",
+        help="How far back to search (e.g. 30d, 7h, 1w, 90m). Default: 30d",
+    )
     args = parser.parse_args()
+
+    freshness_filter = (datetime.now(timezone.utc) - args.since).strftime(
+        'timestamp>="%Y-%m-%dT%H:%M:%SZ"'
+    )
 
     file_path = args.file
     try:
@@ -68,45 +85,42 @@ def main():
         }
 
         interrupted = False
+        pool = ThreadPoolExecutor(max_workers=10)
         try:
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                futures = {
-                    pool.submit(check_pattern, client, p): (i, p)
-                    for i, p in enumerate(patterns)
-                }
-                for completed, future in enumerate(as_completed(futures), 1):
-                    i, pattern = futures[future]
-                    error_msg = None
-                    try:
-                        has_hits, timestamp = future.result()
-                        emoji = "✅" if has_hits else "❌"
-                        results[i] = (emoji, timestamp)
-                    except GoogleAPICallError as e:
-                        error_msg = f"API error: {e}"
-                        results[i] = ("⚠️ ", error_msg)
-                    except Exception as e:
-                        error_msg = f"Error: {e}"
-                        results[i] = ("⚠️ ", error_msg)
+            futures = {
+                pool.submit(check_pattern, client, p, freshness_filter): (i, p)
+                for i, p in enumerate(patterns)
+            }
+            for completed, future in enumerate(as_completed(futures), 1):
+                i, pattern = futures[future]
+                error_msg = None
+                try:
+                    has_hits, timestamp = future.result()
+                    emoji = "✅" if has_hits else "❌"
+                    results[i] = (emoji, timestamp)
+                except GoogleAPICallError as e:
+                    error_msg = f"API error: {e}"
+                    results[i] = ("⚠️ ", error_msg)
+                except Exception as e:
+                    error_msg = f"Error: {e}"
+                    results[i] = ("⚠️ ", error_msg)
 
-                    emoji, _ = results[i]
-                    progress.update(
-                        task_ids[i],
-                        description=f"{emoji} [dim]{pattern}[/dim]",
-                        completed=1,
-                    )
-                    if error_msg:
-                        progress.add_task(
-                            f"  [red]{error_msg}[/red]", total=1, completed=1
-                        )
-                    progress.update(
-                        overall,
-                        description=f"[bold]{completed}/{len(patterns)} done[/bold]",
-                        completed=completed,
-                    )
+                emoji, _ = results[i]
+                progress.update(
+                    task_ids[i],
+                    description=f"{emoji} [dim]{pattern}[/dim]",
+                    completed=1,
+                )
+                if error_msg:
+                    progress.add_task(f"  [red]{error_msg}[/red]", total=1, completed=1)
+                progress.update(
+                    overall,
+                    description=f"[bold]{completed}/{len(patterns)} done[/bold]",
+                    completed=completed,
+                )
         except KeyboardInterrupt:
             interrupted = True
-            for future in futures:
-                future.cancel()
+            pool.shutdown(wait=False, cancel_futures=True)
 
     if interrupted:
         print("--- Results (interrupted) ---", file=sys.stderr)
