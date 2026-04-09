@@ -1,11 +1,17 @@
 import argparse
+import json
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from google.api_core.exceptions import GoogleAPICallError
 from google.cloud import logging as gcp_logging
+from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+EMOJI = {"hit": "✅", "no_hit": "❌", "error": "⚠️ ", "cancelled": "⏸️"}
 
 
 def parse_duration(s: str) -> timedelta:
@@ -17,12 +23,24 @@ def parse_duration(s: str) -> timedelta:
     return timedelta(**{units[s[-1]]: int(s[:-1])})
 
 
+def entry_link(project: str, insert_id: str) -> str:
+    query = quote(f'insertId="{insert_id}"', safe="")
+    return f"https://console.cloud.google.com/logs/query;query={query}?project={project}"
+
+
+def filter_link(project: str, pattern: str, since: timedelta) -> str:
+    total_seconds = int(since.total_seconds())
+    duration = f"P{total_seconds // 86400}D" if total_seconds % 86400 == 0 else f"PT{total_seconds}S"
+    query = quote(pattern, safe="")
+    return f"https://console.cloud.google.com/logs/query;query={query};duration={duration}?project={project}"
+
+
 def check_pattern(
     client: gcp_logging.Client, pattern: str, freshness_filter: str
-) -> tuple[bool, str]:
+) -> tuple[str, str, str]:
+    """Returns (status, timestamp, entry_link) where status is 'hit' or 'no_hit'."""
     full_filter = f"{pattern} {freshness_filter}"
 
-    # print(f"  filter: {full_filter!r}", file=sys.stderr)
     entries = client.list_entries(
         filter_=full_filter,
         order_by="timestamp desc",
@@ -30,22 +48,27 @@ def check_pattern(
     )
     entry = next(iter(entries), None)
     if entry is None:
-        return False, ""
-    return True, str(entry.timestamp)
+        return "no_hit", "", ""
+    link = entry_link(client.project, entry.insert_id) if entry.insert_id else ""
+    return "hit", str(entry.timestamp), link
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("file", help="File with log filter patterns, one per line")
-    parser.add_argument(
-        "--project", help="GCP project ID (defaults to gcloud config project)"
-    )
+    parser.add_argument("--project", help="GCP project ID (defaults to gcloud config project)")
     parser.add_argument(
         "--since",
         default="30d",
         type=parse_duration,
         metavar="DURATION",
         help="How far back to search (e.g. 30d, 7h, 1w, 90m). Default: 30d",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["tsv", "json"],
+        default="tsv",
+        help="Output format. Default: tsv",
     )
     args = parser.parse_args()
 
@@ -68,13 +91,15 @@ def main():
     client = gcp_logging.Client(project=args.project)
     print(f"Using project: {client.project}", file=sys.stderr)
 
-    results: dict[int, tuple[str, str]] = {}
+    # status is one of: "hit", "no_hit", "error"
+    results: dict[int, tuple[str, str, str]] = {}
 
     with Progress(
         TimeElapsedColumn(),
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
+        console=Console(stderr=True),
     ) as progress:
         overall = progress.add_task(
             f"[bold]0/{len(patterns)} done[/bold]", total=len(patterns)
@@ -95,20 +120,19 @@ def main():
                 i, pattern = futures[future]
                 error_msg = None
                 try:
-                    has_hits, timestamp = future.result()
-                    emoji = "✅" if has_hits else "❌"
-                    results[i] = (emoji, timestamp)
+                    status, timestamp, link = future.result()
+                    results[i] = (status, timestamp, link)
                 except GoogleAPICallError as e:
                     error_msg = f"API error: {e}"
-                    results[i] = ("⚠️ ", error_msg)
+                    results[i] = ("error", error_msg, "")
                 except Exception as e:
                     error_msg = f"Error: {e}"
-                    results[i] = ("⚠️ ", error_msg)
+                    results[i] = ("error", error_msg, "")
 
-                emoji, _ = results[i]
+                status, *_ = results[i]
                 progress.update(
                     task_ids[i],
-                    description=f"{emoji} [dim]{pattern}[/dim]",
+                    description=f"{EMOJI[status]} [dim]{pattern}[/dim]",
                     completed=1,
                 )
                 if error_msg:
@@ -127,11 +151,32 @@ def main():
     else:
         print("--- Results ---", file=sys.stderr)
 
-    for i, pattern in enumerate(patterns):
-        if i not in results:
-            continue
-        emoji, timestamp = results[i]
-        print(f"{emoji}\t{pattern}\t{timestamp}")
+    if args.format == "json":
+        output = []
+        for i, pattern in enumerate(patterns):
+            if i not in results:
+                output.append({"pattern": pattern, "status": "cancelled", "timestamp": None, "entry_link": None, "filter_link": filter_link(client.project, pattern, args.since)})
+            else:
+                status, timestamp, link = results[i]
+                output.append({
+                    "pattern": pattern,
+                    "status": status,
+                    "timestamp": timestamp or None,
+                    "entry_link": link or None,
+                    "filter_link": filter_link(client.project, pattern, args.since),
+                })
+        print(json.dumps(output, indent=2))
+    else:
+        for i, pattern in enumerate(patterns):
+            flink = filter_link(client.project, pattern, args.since)
+            if i not in results:
+                print(f"{EMOJI['cancelled']}\t{pattern}\t\t\t{flink}")
+                continue
+            status, timestamp, link = results[i]
+            print(f"{EMOJI[status]}\t{pattern}\t{timestamp}\t{link}\t{flink}")
+
+    if interrupted:
+        os._exit(130)  # 130 = 128 + SIGINT; kills remaining threads immediately
 
 
 if __name__ == "__main__":
