@@ -37,3 +37,6 @@ dev = [
     "basedpyright>=1.39.0",
     "ruff>=0.15.9",
 ]
+
+[tool.ruff]
+line-length = 120
