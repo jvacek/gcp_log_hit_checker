@@ -4,7 +4,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
 from google.api_core.exceptions import GoogleAPICallError
@@ -76,7 +76,7 @@ def main():
     )
     args = parser.parse_args()
 
-    freshness_filter = (datetime.now(timezone.utc) - args.since).strftime('timestamp>="%Y-%m-%dT%H:%M:%SZ"')
+    freshness_filter = (datetime.now(UTC) - args.since).strftime('timestamp>="%Y-%m-%dT%H:%M:%SZ"')
 
     file_path = args.file
     try:
